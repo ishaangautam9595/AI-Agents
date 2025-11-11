@@ -1,144 +1,315 @@
 """
 Query Resolver Agent - Natural Language Query Handler
-Handles queries by breaking them into steps: parse intent, fetch data, generate response
+Production-ready implementation with chain-of-thought reasoning
 """
 
 import streamlit as st
-import openai
-from typing import Dict, List
+from openai import OpenAI
 import json
+from typing import Dict, Optional
+import traceback
 
-# Configure page
-st.set_page_config(page_title="Query Resolver Agent", page_icon="🔍", layout="wide")
+# Page configuration
+st.set_page_config(
+    page_title="Query Resolver Agent",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # Initialize session state
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
-# Mock data store
-MOCK_DATA = {
-    "weather": {"city": "New York", "temp": 72, "condition": "Sunny"},
-    "stock": {"AAPL": 180.5, "GOOGL": 140.2, "MSFT": 380.0},
-    "user": {"name": "John Doe", "age": 30, "location": "NYC"}
-}
+def validate_api_key(api_key: str) -> bool:
+    """Validate OpenAI API key format"""
+    return api_key and api_key.startswith('sk-') and len(api_key) > 20
 
-def parse_intent(query: str, api_key: str) -> Dict:
-    """Parse user intent using chain-of-thought prompting"""
+def parse_intent_with_cot(query: str, client: OpenAI) -> Dict:
+    """
+    Parse user intent using chain-of-thought prompting
+    Returns structured intent data
+    """
     try:
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{
-                "role": "system",
-                "content": """Analyze the query and identify:
-1. Intent type (weather/stock/user info/general)
-2. Key entities mentioned
-3. Required data fields
+        system_prompt = """You are an expert query analyzer. Analyze queries using chain-of-thought reasoning.
 
-Respond in JSON format: {"intent": "type", "entities": ["entity1"], "fields": ["field1"]}"""
-            }, {
-                "role": "user",
-                "content": query
-            }],
-            temperature=0.3
+Break down the query step by step:
+1. Identify the main intent/goal
+2. Extract key entities and parameters
+3. Determine required information type
+4. Identify any ambiguities
+
+Return ONLY valid JSON (no markdown):
+{
+  "intent": "specific intent type",
+  "entities": ["entity1", "entity2"],
+  "query_type": "question/command/search/analysis",
+  "reasoning": "your step-by-step thought process",
+  "required_info": ["info1", "info2"],
+  "ambiguities": ["any unclear aspects"]
+}"""
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Analyze this query: {query}"}
+            ],
+            temperature=0.3,
+            max_tokens=500
         )
-        return json.loads(response.choices[0].message.content)
+        
+        content = response.choices[0].message.content.strip()
+        
+        # Clean potential markdown
+        if '```json' in content:
+            content = content.split('```json')[1].split('```')[0].strip()
+        elif '```' in content:
+            content = content.split('```')[1].split('```')[0].strip()
+        
+        return json.loads(content)
+        
+    except json.JSONDecodeError as e:
+        return {
+            "error": "Failed to parse intent",
+            "details": f"JSON parsing error: {str(e)}",
+            "raw_response": content if 'content' in locals() else "No response"
+        }
     except Exception as e:
-        return {"intent": "general", "entities": [], "fields": [], "error": str(e)}
+        return {
+            "error": "Intent parsing failed",
+            "details": str(e),
+            "traceback": traceback.format_exc()
+        }
 
-def fetch_mock_data(intent_data: Dict) -> Dict:
-    """Fetch relevant mock data based on intent"""
-    intent = intent_data.get("intent", "general")
-    if intent in MOCK_DATA:
-        return MOCK_DATA[intent]
-    return {}
-
-def generate_response(query: str, context: Dict, api_key: str) -> str:
-    """Generate final response with context"""
+def generate_comprehensive_response(query: str, intent_data: Dict, client: OpenAI) -> str:
+    """
+    Generate comprehensive response using the parsed intent
+    """
     try:
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{
-                "role": "system",
-                "content": f"""You are a helpful assistant. Use this context to answer:
-Context: {json.dumps(context)}
+        system_prompt = """You are a helpful AI assistant that provides comprehensive, accurate answers.
 
-Provide a natural, conversational response."""
-            }, {
-                "role": "user",
-                "content": query
-            }],
-            temperature=0.7
+Guidelines:
+- Provide detailed, informative responses
+- Use the intent analysis to structure your answer
+- Be specific and actionable
+- Cite reasoning when making claims
+- If uncertain, acknowledge limitations
+- Format with clear structure when appropriate"""
+
+        user_prompt = f"""Query: {query}
+
+Intent Analysis:
+{json.dumps(intent_data, indent=2)}
+
+Provide a comprehensive answer that addresses the user's intent."""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1000
         )
+        
         return response.choices[0].message.content
+        
     except Exception as e:
-        return f"Error generating response: {str(e)}"
+        return f"Error generating response: {str(e)}\n\nPlease try rephrasing your query."
 
-# UI Layout
-st.title("🔍 Query Resolver Agent")
-st.markdown("*Natural language query handler with chain-of-thought reasoning*")
-
-# Sidebar for API key
+# Sidebar Configuration
 with st.sidebar:
-    st.header("⚙️ Configuration")
-    api_key = st.text_input("OpenAI API Key", type="password", help="Enter your OpenAI API key")
-    st.markdown("---")
-    st.markdown("### How it works")
+    st.header(" Configuration")
+    
+    api_key = st.text_input(
+        "OpenAI API Key",
+        type="password",
+        help="Enter your OpenAI API key (starts with sk-)"
+    )
+    
+    if api_key and not validate_api_key(api_key):
+        st.error(" Invalid API key format")
+    
+    st.divider()
+    
+    st.markdown("###  How It Works")
     st.markdown("""
-    1. **Parse Intent**: Analyzes your query
-    2. **Fetch Data**: Retrieves relevant information
-    3. **Generate Response**: Creates natural answer
+    **Chain-of-Thought Process:**
+    
+    1. **Parse Intent** 
+       - Analyze query structure
+       - Extract entities
+       - Identify goal
+    
+    2. **Reason** 
+       - Apply logical steps
+       - Consider context
+       - Structure approach
+    
+    3. **Generate Response** 
+       - Synthesize information
+       - Provide clear answer
+       - Include reasoning
     """)
-    if st.button("Clear History"):
+    
+    st.divider()
+    
+    st.markdown("###  Statistics")
+    st.metric("Queries Processed", len(st.session_state.chat_history))
+    
+    if st.button("🗑️ Clear History", use_container_width=True):
         st.session_state.chat_history = []
         st.rerun()
 
-# Main interface
-col1, col2 = st.columns([2, 1])
+# Main Interface
+st.title(" Query Resolver Agent")
+st.markdown("*AI-powered query handler with transparent chain-of-thought reasoning*")
 
-with col1:
-    query = st.text_area("Enter your query:", height=100, 
-                        placeholder="e.g., What's the weather like? Show me stock prices.")
+# Input Section
+query = st.text_area(
+    "Enter your query:",
+    height=120,
+    placeholder="Ask anything... Examples:\n• What are the benefits of renewable energy?\n• How does machine learning work?\n• Explain quantum computing in simple terms",
+    help="Type any question or request"
+)
+
+# Example queries
+st.markdown("**Quick Examples:**")
+col1, col2, col3 = st.columns(3)
+
+examples = [
+    "Explain photosynthesis step by step",
+    "What are the main causes of climate change?",
+    "How do neural networks learn?"
+]
+
+for i, (col, example) in enumerate(zip([col1, col2, col3], examples)):
+    with col:
+        if st.button(f" Example {i+1}", use_container_width=True, key=f"ex_{i}"):
+            query = example
+            st.rerun()
+
+st.divider()
+
+# Process Button
+if st.button(" Process Query", type="primary", use_container_width=True):
     
-    if st.button("🚀 Process Query", type="primary", use_container_width=True):
-        if not api_key:
-            st.error("Please enter your OpenAI API key in the sidebar")
-        elif not query:
-            st.warning("Please enter a query")
-        else:
-            with st.spinner("Processing..."):
-                # Step 1: Parse intent
-                with st.expander(" Step 1: Intent Parsing", expanded=True):
-                    intent_data = parse_intent(query, api_key)
-                    st.json(intent_data)
+    # Validation
+    if not api_key:
+        st.error(" Please enter your OpenAI API key in the sidebar")
+        st.stop()
+    
+    if not validate_api_key(api_key):
+        st.error(" Invalid API key format")
+        st.stop()
+    
+    if not query or len(query.strip()) < 3:
+        st.warning(" Please enter a valid query (at least 3 characters)")
+        st.stop()
+    
+    # Initialize client
+    try:
+        client = OpenAI(api_key=api_key)
+    except Exception as e:
+        st.error(f" Failed to initialize OpenAI client: {str(e)}")
+        st.stop()
+    
+    # Processing
+    with st.spinner(" Analyzing query..."):
+        # Step 1: Parse Intent
+        intent_data = parse_intent_with_cot(query, client)
+        
+        if "error" in intent_data:
+            st.error(f" {intent_data['error']}")
+            with st.expander(" Error Details"):
+                st.json(intent_data)
+            st.stop()
+        
+        # Display Intent Analysis
+        with st.expander(" Step 1: Intent Analysis", expanded=True):
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                st.markdown("**Intent Type:**")
+                st.info(intent_data.get('intent', 'Unknown'))
                 
-                # Step 2: Fetch data
-                with st.expander(" Step 2: Data Retrieval", expanded=True):
-                    data = fetch_mock_data(intent_data)
-                    st.json(data if data else {"message": "No specific data needed"})
-                
-                # Step 3: Generate response
-                with st.expander(" Step 3: Response Generation", expanded=True):
-                    response = generate_response(query, data, api_key)
-                    st.success(response)
-                    
-                # Add to history
-                st.session_state.chat_history.append({
-                    "query": query,
-                    "intent": intent_data,
-                    "response": response
-                })
+                st.markdown("**Query Type:**")
+                st.info(intent_data.get('query_type', 'Unknown'))
+            
+            with col_b:
+                st.markdown("**Entities Identified:**")
+                entities = intent_data.get('entities', [])
+                if entities:
+                    for entity in entities:
+                        st.markdown(f"• {entity}")
+                else:
+                    st.markdown("_None identified_")
+            
+            st.markdown("**Reasoning Process:**")
+            st.text_area(
+                "Chain-of-Thought",
+                intent_data.get('reasoning', 'No reasoning provided'),
+                height=100,
+                disabled=True,
+                label_visibility="collapsed"
+            )
+            
+            if intent_data.get('ambiguities'):
+                st.warning("**Ambiguities Detected:**")
+                for amb in intent_data['ambiguities']:
+                    st.markdown(f"• {amb}")
+    
+    with st.spinner("💭 Generating comprehensive response..."):
+        # Step 2: Generate Response
+        response = generate_comprehensive_response(query, intent_data, client)
+        
+        # Display Response
+        st.markdown("---")
+        st.markdown("### Response")
+        st.markdown(response)
+        
+        # Save to history
+        st.session_state.chat_history.append({
+            "query": query,
+            "intent": intent_data.get('intent', 'Unknown'),
+            "query_type": intent_data.get('query_type', 'Unknown'),
+            "response": response,
+            "timestamp": st.session_state.get('timestamp', 0)
+        })
+        
+        st.success(" Query processed successfully!")
 
-with col2:
-    st.markdown("### 📚 Mock Data Store")
-    st.json(MOCK_DATA)
-
-# Display chat history
+# Display Chat History
 if st.session_state.chat_history:
-    st.markdown("---")
-    st.markdown("### Query History")
-    for i, item in enumerate(reversed(st.session_state.chat_history)):
-        with st.expander(f"Query {len(st.session_state.chat_history) - i}: {item['query'][:50]}..."):
-            st.markdown(f"**Intent**: {item['intent'].get('intent', 'N/A')}")
-            st.markdown(f"**Response**: {item['response']}")
+    st.divider()
+    st.markdown("##  Query History")
+    
+    for i, item in enumerate(reversed(st.session_state.chat_history), 1):
+        with st.expander(
+            f"Query {len(st.session_state.chat_history) - i + 1}: {item['query'][:60]}{'...' if len(item['query']) > 60 else ''}",
+            expanded=False
+        ):
+            col1, col2 = st.columns([1, 3])
+            
+            with col1:
+                st.markdown("**Intent:**")
+                st.code(item['intent'])
+                st.markdown("**Type:**")
+                st.code(item['query_type'])
+            
+            with col2:
+                st.markdown("**Query:**")
+                st.info(item['query'])
+                
+                st.markdown("**Response:**")
+                st.markdown(item['response'][:500] + "..." if len(item['response']) > 500 else item['response'])
+
+# Footer
+st.divider()
+st.markdown("""
+<div style='text-align: center; color: #666; padding: 20px;'>
+    <p> Query Resolver Agent | Powered by GPT-4o-mini | Chain-of-Thought Reasoning</p>
+</div>
+""", unsafe_allow_html=True)

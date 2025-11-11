@@ -10,7 +10,7 @@ def get_places_info(api_key, location, radius=15000, query="school"):
     Fetches places near a given location using the Google Places API.
     Handles pagination to retrieve more than 20 results.
     """
-    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    url = "url"
     params = {
         "location": location,
         "radius": radius,
@@ -53,7 +53,7 @@ def get_place_details(api_key, place_id):
     """
     Fetches detailed information about a place using its place_id, including latitude, longitude, and rating.
     """
-    url = "https://maps.googleapis.com/maps/api/place/details/json"
+    url = "url"
     params = {
         "place_id": place_id,
         "fields": "name,formatted_address,geometry/location,rating",
