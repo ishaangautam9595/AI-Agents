@@ -75,7 +75,7 @@ def get_place_details(api_key, place_id):
 
 def geocode_location(api_key, location_name):
     """
-    Converts a location name (e.g., "Ambala, Haryana, India") into latitude and longitude.
+    Converts a location name (e.g., "Delhi, India") into latitude and longitude.
     """
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {
@@ -97,7 +97,7 @@ def main():
     st.write("Enter a location and search for places (e.g., schools) using the Google Places API.")
     
     # Input fields
-    location_input = st.text_input("Enter a location (e.g., 'Ambala, Haryana, India' or '30.3782,76.7767'):")
+    location_input = st.text_input("Enter a location (e.g., 'Delhi, India' or '30.3782,76.7767'):")
     query = st.text_input("Enter the type of place to search for (e.g., 'school'):", "school")
     radius = st.number_input("Enter the search radius in meters:", min_value=100, value=5000)
     
@@ -126,10 +126,10 @@ def main():
                 else:
                     st.warning("No places found.")
             else:
-                # If geocoding fails, try a default location (e.g., Ambala, Haryana, India)
-                st.warning(f"Could not geocode '{location_input}'. Using default location: Ambala, Haryana, India.")
-                default_location = "30.3782,76.7767"  # Coordinates for Ambala, Haryana, India
-                st.write(f"Searching for '{query}' near Ambala, Haryana, India...")
+                # If geocoding fails, try a default location (e.g., Delhi, India)
+                st.warning(f"Could not geocode '{location_input}'. Using default location: Delhi, India.")
+                default_location = "30.3782,76.7767"  # Coordinates for Delhi, India
+                st.write(f"Searching for '{query}' near Delhi, India...")
                 places_info = get_places_info(API_KEY, default_location, radius, query)
                 
                 if places_info:
